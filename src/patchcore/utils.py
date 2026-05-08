@@ -12,6 +12,29 @@ import tqdm
 LOGGER = logging.getLogger(__name__)
 
 
+def float_matrix_to_q8rle(x: np.ndarray) -> str:
+    """Encode a [0, 1] float anomaly map as a q8rle string.
+
+    Quantizes to [0, 255], flattens column-wise, then run-length encodes
+    consecutive identical values. Format:
+        q8rle <height> <width> <value_1> <runlen_1> <value_2> <runlen_2> ...
+    """
+    q = np.clip(np.rint(np.asarray(x, dtype=np.float32) * 255), 0, 255).astype(
+        np.uint8
+    )
+    h, w = q.shape
+    flat = q.T.reshape(-1)
+    if flat.size == 0:
+        return f"q8rle {h} {w}"
+    cuts = np.flatnonzero(flat[1:] != flat[:-1]) + 1
+    starts = np.r_[0, cuts]
+    ends = np.r_[cuts, flat.size]
+    parts = ["q8rle", str(h), str(w)]
+    for v, n in zip(flat[starts], ends - starts):
+        parts += [str(int(v)), str(int(n))]
+    return " ".join(parts)
+
+
 def plot_segmentation_images(
     savefolder,
     image_paths,
@@ -22,9 +45,15 @@ def plot_segmentation_images(
     mask_transform=lambda x: x,
     save_depth=4,
 ):
-    """Generate anomaly segmentation images.
+    """Generate anomaly segmentation images and a q8rle-encoded predictions CSV.
+
+    Saves visualisation images (original, ground truth, predicted map) into a
+    ``segmentation_images/`` subfolder of *savefolder*, and writes a
+    ``predictions.csv`` file directly inside *savefolder* with columns
+    ``ID,Label`` where *Label* is the q8rle-encoded anomaly map.
 
     Args:
+        savefolder: [str] Root folder for outputs.
         image_paths: List[str] List of paths to images.
         segmentations: [List[np.ndarray]] Generated anomaly segmentations.
         anomaly_scores: [List[float]] Anomaly scores for each image.
@@ -39,7 +68,10 @@ def plot_segmentation_images(
     if anomaly_scores is None:
         anomaly_scores = ["-1" for _ in range(len(image_paths))]
 
-    os.makedirs(savefolder, exist_ok=True)
+    images_folder = os.path.join(savefolder, "segmentation_images")
+    os.makedirs(images_folder, exist_ok=True)
+
+    csv_rows = []
 
     for image_path, mask_path, anomaly_score, segmentation in tqdm.tqdm(
         zip(image_paths, mask_paths, anomaly_scores, segmentations),
@@ -63,7 +95,11 @@ def plot_segmentation_images(
 
         savename = image_path.split("/")
         savename = "_".join(savename[-save_depth:])
-        savename = os.path.join(savefolder, savename)
+
+        image_id = os.path.splitext(savename)[0]
+        csv_rows.append((image_id, float_matrix_to_q8rle(segmentation)))
+
+        savename = os.path.join(images_folder, savename)
         f, axes = plt.subplots(1, 2 + int(masks_provided))
         axes[0].imshow(image.transpose(1, 2, 0))
         axes[1].imshow(mask.transpose(1, 2, 0))
@@ -72,6 +108,13 @@ def plot_segmentation_images(
         f.tight_layout()
         f.savefig(savename)
         plt.close()
+
+    csv_path = os.path.join(savefolder, "predictions.csv")
+    with open(csv_path, "w", newline="") as csv_file:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["ID", "Label"])
+        csv_writer.writerows(csv_rows)
+    LOGGER.info("Saved %d predictions to %s", len(csv_rows), csv_path)
 
 
 def create_storage_folder(
