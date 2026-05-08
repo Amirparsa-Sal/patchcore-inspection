@@ -162,8 +162,9 @@ class PatchCore(torch.nn.Module):
                 return self._embed(input_image)
 
         features = []
+        # Avoid position>0 without a parent bar — breaks tqdm refresh on many terminals.
         with tqdm.tqdm(
-            input_data, desc="Computing support features...", position=1, leave=False
+            input_data, desc="Computing support features...", leave=False
         ) as data_iterator:
             for image in data_iterator:
                 if isinstance(image, dict):
