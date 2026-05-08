@@ -3,9 +3,11 @@
 # Train PatchCore and evaluate per MVTec class. Run from the repository root,
 # or this script will cd there automatically.
 #
-# Storage layout follows run_patchcore.py:create_storage_folder:
-#   {train_results_dir}/{log_project}/{log_group}/...
-# Example: results/anomaly_challenge/my_run/models/mvtec_bottle/
+# Storage layout follows run_patchcore.py:create_storage_folder (mode=iterate):
+#   {train_results_dir}/{log_project}/{log_group}/{class}/...
+# Each class uses LOG_GROUP/<classname> so iterate mode does not bump the folder
+# to log_group_0 on the second class (which would save models where eval cannot find them).
+# Example: results/anomaly_challenge/my_run/bottle/models/mvtec_bottle/
 #
 # Parameters (CLI flags override environment defaults):
 #   LOG_PROJECT      -- outer folder under results (default: anomaly_challenge)
@@ -161,7 +163,7 @@ echo "  log_group          = ${LOG_GROUP}"
 echo "  target_embed       = ${TARGET_EMBED}"
 echo "  coreset_p          = ${CORESET_P}"
 echo "  dataset_path       = ${DATASET_PATH}"
-echo "  train_save_rel     = ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/"
+echo "  train_save_pattern = ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/<class>/"
 echo "  train_results_dir  = ${TRAIN_RESULTS_DIR}"
 echo "  eval_results_dir   = ${EVAL_RESULTS_DIR}"
 echo "  gpu / seed         = ${GPU} / ${SEED}"
@@ -170,6 +172,8 @@ echo ""
 
 for class_name in "${CLASSES[@]}"; do
   IDX=$((IDX + 1))
+  # Nested path: iterate avoids collision when the parent experiment folder exists.
+  CLASS_LOG_GROUP="${LOG_GROUP}/${class_name}"
 
   print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — TRAINING"
   echo "Starting run_patchcore.py for class '${class_name}'..."
@@ -177,7 +181,7 @@ for class_name in "${CLASSES[@]}"; do
   python bin/run_patchcore.py \
     --gpu "${GPU}" --seed "${SEED}" \
     --save_patchcore_model \
-    --log_group "${LOG_GROUP}" \
+    --log_group "${CLASS_LOG_GROUP}" \
     --log_project "${LOG_PROJECT}" \
     "${TRAIN_RESULTS_DIR}" \
     patch_core \
@@ -200,14 +204,14 @@ for class_name in "${CLASSES[@]}"; do
 
   print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — EVALUATION"
   echo "Starting load_and_evaluate_patchcore.py for class '${class_name}'..."
-  echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/models/mvtec_${class_name}"
+  echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}"
 
   python bin/load_and_evaluate_patchcore.py \
     --gpu "${GPU}" --seed "${SEED}" \
     --save_segmentation_images \
     "${EVAL_RESULTS_DIR}" \
     patch_core_loader \
-      -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/models/mvtec_${class_name}" \
+      -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}" \
     dataset \
       --resize 224 --imagesize 224 \
       -d "${class_name}" \
