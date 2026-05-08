@@ -3,22 +3,26 @@
 # Train PatchCore and evaluate per MVTec class. Run from the repository root,
 # or this script will cd there automatically.
 #
+# Storage layout follows run_patchcore.py:create_storage_folder:
+#   {train_results_dir}/{log_project}/{log_group}/...
+# Example: results/anomaly_challenge/my_run/models/mvtec_bottle/
+#
 # Parameters (CLI flags override environment defaults):
-#   EXP_NAME         -- log_project name and evaluated output folder basename
+#   LOG_PROJECT      -- outer folder under results (default: anomaly_challenge)
+#   LOG_GROUP        -- inner run folder; set via --log-group or env LOG_GROUP (required)
 #   TARGET_EMBED     -- --target_embed_dimension
 #   CORESET_P        -- coreset sampling percentage (-p for approx_greedy_coreset)
 #   DATASET_PATH     -- path to MVTec root directory
 #   CLASS_NAMES      -- space-separated class list if not using --classes
 #   GPU, SEED        -- passed through to both Python entrypoints
-#   LOG_GROUP        -- defaults to anomaly_challenge (matches your template)
 #
 # Examples:
 #   ./train_eval_mvtec_classes.sh \
-#     --exp-name my_run --target-embed 1024 --coreset-p 0.1 \
+#     --log-group my_run --target-embed 1024 --coreset-p 0.1 \
 #     --dataset-path /data/mvtec --classes bottle,cable,zipper
 #
-#   CLASS_NAMES="bottle screw" DATASET_PATH=/data/mvtec \
-#     ./train_eval_mvtec_classes.sh --exp-name run_a --target-embed 512 --coreset-p 0.05
+#   LOG_GROUP=run_a CLASS_NAMES="bottle screw" DATASET_PATH=/data/mvtec \
+#     ./train_eval_mvtec_classes.sh --target-embed 512 --coreset-p 0.05
 #
 
 set -euo pipefail
@@ -26,14 +30,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
-# Defaults (override with flags or env)
-: "${EXP_NAME:=my_experiment}"
+# Defaults (override with flags or env). LOG_GROUP is required (see below).
+: "${LOG_PROJECT:=anomaly_challenge}"
 : "${TARGET_EMBED:=1024}"
 : "${CORESET_P:=0.1}"
 : "${DATASET_PATH:=/path/to/mvtec}"
 : "${GPU:=0}"
 : "${SEED:=0}"
-: "${LOG_GROUP:=anomaly_challenge}"
 
 EVAL_RESULTS_DIR="${EVAL_RESULTS_DIR:-}"
 TRAIN_RESULTS_DIR="${TRAIN_RESULTS_DIR:-}"
@@ -45,15 +48,15 @@ Usage: $(basename "$0") [options]
 Train and evaluate PatchCore for each MVTec class (one train + one eval per class).
 
 Options:
-  --exp-name NAME        Experiment / log_project name (default: ${EXP_NAME})
+  --log-group NAME       Run folder inside log_project (required unless LOG_GROUP env is set)
+  --log-project NAME     Outer folder under train results (default: ${LOG_PROJECT})
   --target-embed N       Target embedding dimension (default: ${TARGET_EMBED})
   --coreset-p P          Coreset percentage, e.g. 0.1 (default: ${CORESET_P})
   --dataset-path PATH    MVTec dataset root (default: ${DATASET_PATH})
   --classes LIST         Comma-separated class names, e.g. bottle,cable,zipper
   --gpu ID               GPU id (default: ${GPU})
   --seed N               Random seed (default: ${SEED})
-  --log-group NAME       Logger group folder (default: ${LOG_GROUP})
-  --eval-dir PATH        Evaluation output root (default: evaluated_results/<exp_name>)
+  --eval-dir PATH        Evaluation output root (default: evaluated_results/<log_group>)
   --train-results PATH   Training results root first arg (default: results)
   -h, --help             Show this help
 
@@ -68,8 +71,12 @@ CLASSES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --exp-name)
-      EXP_NAME="$2"
+    --log-group)
+      LOG_GROUP="$2"
+      shift 2
+      ;;
+    --log-project)
+      LOG_PROJECT="$2"
       shift 2
       ;;
     --target-embed)
@@ -94,10 +101,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --seed)
       SEED="$2"
-      shift 2
-      ;;
-    --log-group)
-      LOG_GROUP="$2"
       shift 2
       ;;
     --eval-dir)
@@ -132,8 +135,13 @@ if [[ ${#CLASSES[@]} -eq 0 ]]; then
   exit 1
 fi
 
+if [[ -z "${LOG_GROUP:-}" ]]; then
+  echo "error: set LOG_GROUP (environment) or pass --log-group (inner run folder under .../results/<log_project>/)." >&2
+  exit 1
+fi
+
 [[ -z "${TRAIN_RESULTS_DIR}" ]] && TRAIN_RESULTS_DIR="results"
-[[ -z "${EVAL_RESULTS_DIR}" ]] && EVAL_RESULTS_DIR="evaluated_results/${EXP_NAME}"
+[[ -z "${EVAL_RESULTS_DIR}" ]] && EVAL_RESULTS_DIR="evaluated_results/${LOG_GROUP}"
 
 NUM_CLASSES=${#CLASSES[@]}
 IDX=0
@@ -148,11 +156,12 @@ print_banner() {
 }
 
 print_banner "PatchCore MVTec sweep"
-echo "  exp_name           = ${EXP_NAME}"
+echo "  log_project        = ${LOG_PROJECT}"
+echo "  log_group          = ${LOG_GROUP}"
 echo "  target_embed       = ${TARGET_EMBED}"
 echo "  coreset_p          = ${CORESET_P}"
 echo "  dataset_path       = ${DATASET_PATH}"
-echo "  log_group          = ${LOG_GROUP}"
+echo "  train_save_rel     = ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/"
 echo "  train_results_dir  = ${TRAIN_RESULTS_DIR}"
 echo "  eval_results_dir   = ${EVAL_RESULTS_DIR}"
 echo "  gpu / seed         = ${GPU} / ${SEED}"
@@ -169,7 +178,7 @@ for class_name in "${CLASSES[@]}"; do
     --gpu "${GPU}" --seed "${SEED}" \
     --save_patchcore_model \
     --log_group "${LOG_GROUP}" \
-    --log_project "${EXP_NAME}" \
+    --log_project "${LOG_PROJECT}" \
     "${TRAIN_RESULTS_DIR}" \
     patch_core \
       -b wideresnet50 \
@@ -191,14 +200,14 @@ for class_name in "${CLASSES[@]}"; do
 
   print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — EVALUATION"
   echo "Starting load_and_evaluate_patchcore.py for class '${class_name}'..."
-  echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_GROUP}/${EXP_NAME}/models/mvtec_${class_name}"
+  echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/models/mvtec_${class_name}"
 
   python bin/load_and_evaluate_patchcore.py \
     --gpu "${GPU}" --seed "${SEED}" \
     --save_segmentation_images \
     "${EVAL_RESULTS_DIR}" \
     patch_core_loader \
-      -p "${TRAIN_RESULTS_DIR}/${LOG_GROUP}/${EXP_NAME}/models/mvtec_${class_name}" \
+      -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/models/mvtec_${class_name}" \
     dataset \
       --resize 224 --imagesize 224 \
       -d "${class_name}" \
