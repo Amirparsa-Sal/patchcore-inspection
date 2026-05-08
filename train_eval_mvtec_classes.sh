@@ -9,6 +9,7 @@
 # to log_group_0 on the second class (which would save models where eval cannot find them).
 # Example: results/anomaly_challenge/my_run/bottle/models/mvtec_bottle/
 #
+# Evaluation outputs (load_and_evaluate_patchcore): {eval_dir}/{class}/ holds results.csv and segmentation_images/.
 # Parameters (CLI flags override environment defaults):
 #   LOG_PROJECT      -- outer folder under results (default: anomaly_challenge)
 #   LOG_GROUP        -- inner run folder; set via --log-group or env LOG_GROUP (required)
@@ -58,7 +59,7 @@ Options:
   --classes LIST         Comma-separated class names, e.g. bottle,cable,zipper
   --gpu ID               GPU id (default: ${GPU})
   --seed N               Random seed (default: ${SEED})
-  --eval-dir PATH        Evaluation output root (default: evaluated_results/<log_group>)
+  --eval-dir PATH        Evaluation root; outputs go under PATH/<class>/ (default: evaluated_results/<log_group>)
   --train-results PATH   Training results root first arg (default: results)
   -h, --help             Show this help
 
@@ -165,7 +166,7 @@ echo "  coreset_p          = ${CORESET_P}"
 echo "  dataset_path       = ${DATASET_PATH}"
 echo "  train_save_pattern = ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/<class>/"
 echo "  train_results_dir  = ${TRAIN_RESULTS_DIR}"
-echo "  eval_results_dir   = ${EVAL_RESULTS_DIR}"
+echo "  eval_save_pattern  = ${EVAL_RESULTS_DIR}/<class>/"
 echo "  gpu / seed         = ${GPU} / ${SEED}"
 echo "  classes (${NUM_CLASSES}): ${CLASSES[*]}"
 echo ""
@@ -202,14 +203,17 @@ for class_name in "${CLASSES[@]}"; do
   echo ">>> Finished training for class '${class_name}' (${IDX}/${NUM_CLASSES})."
   echo ""
 
+  CLASS_EVAL_DIR="${EVAL_RESULTS_DIR}/${class_name}"
+
   print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — EVALUATION"
   echo "Starting load_and_evaluate_patchcore.py for class '${class_name}'..."
   echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}"
+  echo "Eval output dir: ${CLASS_EVAL_DIR}"
 
   python bin/load_and_evaluate_patchcore.py \
     --gpu "${GPU}" --seed "${SEED}" \
     --save_segmentation_images \
-    "${EVAL_RESULTS_DIR}" \
+    "${CLASS_EVAL_DIR}" \
     patch_core_loader \
       -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}" \
     dataset \
@@ -223,5 +227,5 @@ for class_name in "${CLASSES[@]}"; do
 done
 
 print_banner "All done"
-echo "Processed ${NUM_CLASSES} class(es). Evaluations saved under: ${EVAL_RESULTS_DIR}"
+echo "Processed ${NUM_CLASSES} class(es). Evaluations saved under: ${EVAL_RESULTS_DIR}/<class>/"
 echo ""
