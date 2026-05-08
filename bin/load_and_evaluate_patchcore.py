@@ -142,6 +142,7 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                     mask_paths,
                     image_transform=image_transform,
                     mask_transform=mask_transform,
+                    is_anomaly=anomaly_labels,
                 )
 
             LOGGER.info("Computing evaluation metrics.")

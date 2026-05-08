@@ -2,6 +2,7 @@ import csv
 import logging
 import os
 import random
+from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,14 +44,17 @@ def plot_segmentation_images(
     mask_paths=None,
     image_transform=lambda x: x,
     mask_transform=lambda x: x,
-    save_depth=4,
+    is_anomaly: Optional[Sequence[bool]] = None,
 ):
-    """Generate anomaly segmentation images and a q8rle-encoded predictions CSV.
+    """Generate anomaly segmentation images and q8rle-encoded prediction CSVs.
 
     Saves visualisation images (original, ground truth, predicted map) into a
-    ``segmentation_images/`` subfolder of *savefolder*, and writes a
-    ``predictions.csv`` file directly inside *savefolder* with columns
-    ``ID,Label`` where *Label* is the q8rle-encoded anomaly map.
+    ``segmentation_images/`` subfolder of *savefolder*. Image files and CSV IDs
+    use only the source image basename (no parent directory names).
+
+    Writes ``predictions_normal.csv`` and ``predictions_anomalous.csv`` (each
+    with columns ``ID``, ``Label``) when sample type is known. If type cannot
+    be determined, writes a single ``predictions.csv`` with all rows.
 
     Args:
         savefolder: [str] Root folder for outputs.
@@ -60,7 +64,9 @@ def plot_segmentation_images(
         mask_paths: [List[str]] List of paths to ground truth masks.
         image_transform: [function or lambda] Optional transformation of images.
         mask_transform: [function or lambda] Optional transformation of masks.
-        save_depth: [int] Number of path-strings to use for image savenames.
+        is_anomaly: Optional per-image defect flags (same order as *image_paths*).
+            When omitted and masks are provided, normal vs anomalous is inferred
+            from whether *mask_path* is None (e.g. MVTec ``good`` vs defect).
     """
     if mask_paths is None:
         mask_paths = ["-1" for _ in range(len(image_paths))]
@@ -68,16 +74,34 @@ def plot_segmentation_images(
     if anomaly_scores is None:
         anomaly_scores = ["-1" for _ in range(len(image_paths))]
 
+    n = len(image_paths)
+    if is_anomaly is not None and len(is_anomaly) != n:
+        raise ValueError(
+            "is_anomaly length {} must match image_paths length {}.".format(
+                len(is_anomaly), n
+            )
+        )
+
+    def per_sample_defect(mask_path):
+        """True if sample is treated as anomalous (unknown mask -> False)."""
+        if not masks_provided:
+            return False
+        return mask_path is not None
+
     images_folder = os.path.join(savefolder, "segmentation_images")
     os.makedirs(images_folder, exist_ok=True)
 
-    csv_rows = []
+    csv_rows_normal = []
+    csv_rows_anomalous = []
+    csv_rows_all = []
 
-    for image_path, mask_path, anomaly_score, segmentation in tqdm.tqdm(
-        zip(image_paths, mask_paths, anomaly_scores, segmentations),
-        total=len(image_paths),
-        desc="Generating Segmentation Images...",
-        leave=False,
+    for idx, (image_path, mask_path, anomaly_score, segmentation) in enumerate(
+        tqdm.tqdm(
+            zip(image_paths, mask_paths, anomaly_scores, segmentations),
+            total=n,
+            desc="Generating Segmentation Images...",
+            leave=False,
+        )
     ):
         image = PIL.Image.open(image_path).convert("RGB")
         image = image_transform(image)
@@ -93,28 +117,69 @@ def plot_segmentation_images(
             else:
                 mask = np.zeros_like(image)
 
-        savename = image_path.split("/")
-        savename = "_".join(savename[-save_depth:])
-
+        savename = os.path.basename(image_path)
         image_id = os.path.splitext(savename)[0]
-        csv_rows.append((image_id, float_matrix_to_q8rle(segmentation)))
+        label = float_matrix_to_q8rle(segmentation)
+        row = (image_id, label)
+        csv_rows_all.append(row)
+
+        if is_anomaly is not None:
+            defect = bool(is_anomaly[idx])
+        elif masks_provided:
+            defect = per_sample_defect(mask_path)
+        else:
+            defect = None
+
+        if defect is True:
+            csv_rows_anomalous.append(row)
+        elif defect is False:
+            csv_rows_normal.append(row)
 
         savename = os.path.join(images_folder, savename)
-        f, axes = plt.subplots(1, 2 + int(masks_provided))
-        axes[0].imshow(image.transpose(1, 2, 0))
-        axes[1].imshow(mask.transpose(1, 2, 0))
-        axes[2].imshow(segmentation)
-        f.set_size_inches(3 * (2 + int(masks_provided)), 3)
+        if masks_provided:
+            f, axes = plt.subplots(1, 3)
+            axes[0].imshow(image.transpose(1, 2, 0))
+            axes[1].imshow(mask.transpose(1, 2, 0))
+            axes[2].imshow(segmentation)
+            f.set_size_inches(9, 3)
+        else:
+            f, axes = plt.subplots(1, 2)
+            axes[0].imshow(image.transpose(1, 2, 0))
+            axes[1].imshow(segmentation)
+            f.set_size_inches(6, 3)
         f.tight_layout()
         f.savefig(savename)
         plt.close()
 
-    csv_path = os.path.join(savefolder, "predictions.csv")
-    with open(csv_path, "w", newline="") as csv_file:
-        csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(["ID", "Label"])
-        csv_writer.writerows(csv_rows)
-    LOGGER.info("Saved %d predictions to %s", len(csv_rows), csv_path)
+    if is_anomaly is not None or masks_provided:
+        path_normal = os.path.join(savefolder, "predictions_normal.csv")
+        path_anomalous = os.path.join(savefolder, "predictions_anomalous.csv")
+        for path, rows in (
+            (path_normal, csv_rows_normal),
+            (path_anomalous, csv_rows_anomalous),
+        ):
+            with open(path, "w", newline="") as csv_file:
+                csv_writer = csv.writer(csv_file)
+                csv_writer.writerow(["ID", "Label"])
+                csv_writer.writerows(rows)
+        LOGGER.info(
+            "Saved %d normal and %d anomalous predictions to %s and %s",
+            len(csv_rows_normal),
+            len(csv_rows_anomalous),
+            path_normal,
+            path_anomalous,
+        )
+    else:
+        csv_path = os.path.join(savefolder, "predictions.csv")
+        with open(csv_path, "w", newline="") as csv_file:
+            csv_writer = csv.writer(csv_file)
+            csv_writer.writerow(["ID", "Label"])
+            csv_writer.writerows(csv_rows_all)
+        LOGGER.info(
+            "Saved %d predictions to %s (single file; could not split normal vs anomalous)",
+            len(csv_rows_all),
+            csv_path,
+        )
 
 
 def create_storage_folder(
