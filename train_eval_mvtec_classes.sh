@@ -17,6 +17,8 @@
 #   CORESET_P        -- coreset sampling percentage (-p for approx_greedy_coreset)
 #   DATASET_PATH     -- path to MVTec root directory
 #   CLASS_NAMES      -- space-separated class list if not using --classes
+#   NUM_WORKERS      -- PyTorch DataLoader workers for train/eval (default: 8)
+#   FAISS_NUM_WORKERS -- FAISS thread count for nearest-neighbor search (default: 8)
 #   GPU, SEED        -- passed through to both Python entrypoints
 #   PUSHBULLET_API_KEY -- access token (required if you pass --notify)
 #
@@ -41,6 +43,8 @@ cd "$REPO_ROOT"
 : "${DATASET_PATH:=/path/to/mvtec}"
 : "${GPU:=0}"
 : "${SEED:=0}"
+: "${NUM_WORKERS:=8}"
+: "${FAISS_NUM_WORKERS:=8}"
 
 EVAL_RESULTS_DIR="${EVAL_RESULTS_DIR:-}"
 TRAIN_RESULTS_DIR="${TRAIN_RESULTS_DIR:-}"
@@ -63,6 +67,8 @@ Options:
   --classes LIST         Comma-separated class names, e.g. bottle,cable,zipper
   --gpu ID               GPU id (default: ${GPU})
   --seed N               Random seed (default: ${SEED})
+  --num-workers N        DataLoader worker processes (default: ${NUM_WORKERS})
+  --faiss-num-workers N  FAISS threads for NN search (default: ${FAISS_NUM_WORKERS})
   --eval-dir PATH        Evaluation root; outputs go under PATH/<class>/ (default: evaluated_results/<log_group>)
   --train-results PATH   Training results root first arg (default: results)
   --notify               Send Pushbullet notes for each phase (needs PUSHBULLET_API_KEY)
@@ -110,6 +116,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --seed)
       SEED="$2"
+      shift 2
+      ;;
+    --num-workers)
+      NUM_WORKERS="$2"
+      shift 2
+      ;;
+    --faiss-num-workers)
+      FAISS_NUM_WORKERS="$2"
       shift 2
       ;;
     --eval-dir)
@@ -235,6 +249,8 @@ echo "  train_save_pattern = ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${LOG_GROUP}/<c
 echo "  train_results_dir  = ${TRAIN_RESULTS_DIR}"
 echo "  eval_save_pattern  = ${EVAL_RESULTS_DIR}/<class>/"
 echo "  gpu / seed         = ${GPU} / ${SEED}"
+echo "  num_workers        = ${NUM_WORKERS}"
+echo "  faiss_num_workers  = ${FAISS_NUM_WORKERS}"
 echo "  classes (${NUM_CLASSES}): ${CLASSES[*]}"
 echo ""
 
@@ -268,10 +284,12 @@ for class_name in "${CLASSES[@]}"; do
       --target_embed_dimension "${TARGET_EMBED}" \
       --anomaly_scorer_num_nn 1 \
       --patchsize 3 \
+      --faiss_num_workers "${FAISS_NUM_WORKERS}" \
     sampler \
       -p "${CORESET_P}" approx_greedy_coreset \
     dataset \
       --resize 224 --imagesize 224 \
+      --num_workers "${NUM_WORKERS}" \
       -d "${class_name}" \
       mvtec "${DATASET_PATH}"
 
@@ -294,8 +312,10 @@ for class_name in "${CLASSES[@]}"; do
     "${CLASS_EVAL_DIR}" \
     patch_core_loader \
       -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}" \
+      --faiss_num_workers "${FAISS_NUM_WORKERS}" \
     dataset \
       --resize 224 --imagesize 224 \
+      --num_workers "${NUM_WORKERS}" \
       -d "${class_name}" \
       mvtec "${DATASET_PATH}"
 
