@@ -18,6 +18,7 @@
 #   DATASET_PATH     -- path to MVTec root directory
 #   CLASS_NAMES      -- space-separated class list if not using --classes
 #   GPU, SEED        -- passed through to both Python entrypoints
+#   PUSHBULLET_API_KEY -- access token (required if you pass --notify)
 #
 # Examples:
 #   ./train_eval_mvtec_classes.sh \
@@ -44,6 +45,9 @@ cd "$REPO_ROOT"
 EVAL_RESULTS_DIR="${EVAL_RESULTS_DIR:-}"
 TRAIN_RESULTS_DIR="${TRAIN_RESULTS_DIR:-}"
 
+NOTIFY_PUSHBULLET=0
+NOTIFY_NOTE_TITLE="PatchCore"
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
@@ -61,6 +65,8 @@ Options:
   --seed N               Random seed (default: ${SEED})
   --eval-dir PATH        Evaluation root; outputs go under PATH/<class>/ (default: evaluated_results/<log_group>)
   --train-results PATH   Training results root first arg (default: results)
+  --notify               Send Pushbullet notes for each phase (needs PUSHBULLET_API_KEY)
+  --notify-title TEXT    Push note title when using --notify (default: PatchCore)
   -h, --help             Show this help
 
 If --classes is omitted, classes are taken from CLASS_NAMES (space-separated).
@@ -114,6 +120,14 @@ while [[ $# -gt 0 ]]; do
       TRAIN_RESULTS_DIR="$2"
       shift 2
       ;;
+    --notify)
+      NOTIFY_PUSHBULLET=1
+      shift
+      ;;
+    --notify-title)
+      NOTIFY_NOTE_TITLE="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -143,11 +157,64 @@ if [[ -z "${LOG_GROUP:-}" ]]; then
   exit 1
 fi
 
+if [[ "${NOTIFY_PUSHBULLET}" -eq 1 ]]; then
+  if [[ -z "${PUSHBULLET_API_KEY:-}" ]]; then
+    echo "error: --notify requires PUSHBULLET_API_KEY in the environment." >&2
+    exit 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: --notify requires curl on PATH." >&2
+    exit 1
+  fi
+fi
+
 [[ -z "${TRAIN_RESULTS_DIR}" ]] && TRAIN_RESULTS_DIR="results"
 [[ -z "${EVAL_RESULTS_DIR}" ]] && EVAL_RESULTS_DIR="evaluated_results/${LOG_GROUP}"
 
 NUM_CLASSES=${#CLASSES[@]}
 IDX=0
+
+# Send a Pushbullet note (no extra Python deps; uses curl). Skipped unless --notify.
+_pushbullet_note() {
+  local title=$1
+  local body=$2
+  [[ "${NOTIFY_PUSHBULLET}" -eq 1 ]] || return 0
+  local json
+  json="$(
+    NOTIFY_JSON_TITLE="$title" NOTIFY_JSON_BODY="$body" python3 -c '
+import json, os
+print(json.dumps({
+    "type": "note",
+    "title": os.environ["NOTIFY_JSON_TITLE"],
+    "body": os.environ["NOTIFY_JSON_BODY"],
+}))
+'
+  )" || {
+    echo "warning: could not build Pushbullet JSON payload" >&2
+    return 0
+  }
+  if ! curl -sfS --connect-timeout 15 \
+    -u "${PUSHBULLET_API_KEY}:" \
+    -H "Content-Type: application/json" \
+    -X POST "https://api.pushbullet.com/v2/pushes" \
+    -d "${json}" >/dev/null; then
+    echo "warning: Pushbullet request failed (title: ${title})" >&2
+  fi
+}
+
+# On exit, report success or failure (so notifications still fire if a python step fails under set -e).
+_pushbullet_exit_trap() {
+  local ec=$?
+  if [[ "${NOTIFY_PUSHBULLET}" -eq 1 ]]; then
+    if [[ "${ec}" -eq 0 ]]; then
+      _pushbullet_note "${NOTIFY_NOTE_TITLE}" "Training finished successfully"
+    else
+      _pushbullet_note "${NOTIFY_NOTE_TITLE}" "Training failed with code ${ec}"
+    fi
+  fi
+  exit "${ec}"
+}
+trap "_pushbullet_exit_trap" EXIT
 
 print_banner() {
   local title=$1
@@ -171,12 +238,21 @@ echo "  gpu / seed         = ${GPU} / ${SEED}"
 echo "  classes (${NUM_CLASSES}): ${CLASSES[*]}"
 echo ""
 
+if [[ "${NOTIFY_PUSHBULLET}" -eq 1 ]]; then
+  echo "  pushbullet notify   = on (title: ${NOTIFY_NOTE_TITLE})"
+  echo ""
+  _pushbullet_note "${NOTIFY_NOTE_TITLE}" \
+    "PatchCore sweep started (log_group=${LOG_GROUP}, classes=${NUM_CLASSES})"
+fi
+
 for class_name in "${CLASSES[@]}"; do
   IDX=$((IDX + 1))
   # Nested path: iterate avoids collision when the parent experiment folder exists.
   CLASS_LOG_GROUP="${LOG_GROUP}/${class_name}"
 
-  print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — TRAINING"
+  _TRAIN_PHASE="Class ${IDX}/${NUM_CLASSES}: ${class_name} — TRAINING"
+  print_banner "${_TRAIN_PHASE}"
+  _pushbullet_note "${NOTIFY_NOTE_TITLE}" "${_TRAIN_PHASE}"
   echo "Starting run_patchcore.py for class '${class_name}'..."
 
   python bin/run_patchcore.py \
@@ -205,7 +281,9 @@ for class_name in "${CLASSES[@]}"; do
 
   CLASS_EVAL_DIR="${EVAL_RESULTS_DIR}/${class_name}"
 
-  print_banner "Class ${IDX}/${NUM_CLASSES}: ${class_name} — EVALUATION"
+  _EVAL_PHASE="Class ${IDX}/${NUM_CLASSES}: ${class_name} — EVALUATION"
+  print_banner "${_EVAL_PHASE}"
+  _pushbullet_note "${NOTIFY_NOTE_TITLE}" "${_EVAL_PHASE}"
   echo "Starting load_and_evaluate_patchcore.py for class '${class_name}'..."
   echo "Model path: ${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}"
   echo "Eval output dir: ${CLASS_EVAL_DIR}"
