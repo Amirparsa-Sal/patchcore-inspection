@@ -27,6 +27,19 @@ DEFAULT_INPUT_NAME = "predictions_normal.csv"
 MERGED_DEFAULT_NAME = "merged_predictions_normal.csv"
 
 
+def _ensure_csv_field_limit_for_q8rle() -> None:
+    """Raise csv reader field limit; q8rle ``Label`` cells are often far above default (~128 KiB)."""
+
+    max_int = sys.maxsize
+    while max_int > 0:
+        try:
+            csv.field_size_limit(max_int)
+            return
+        except OverflowError:
+            max_int //= 10
+    raise RuntimeError("Could not raise csv.field_size_limit for large q8rle fields.")
+
+
 def list_class_prediction_csvs(experiment_dir: Path, csv_name: str) -> list[tuple[str, Path]]:
     """Return sorted ``(class_name, csv_path)`` for direct child dirs containing ``csv_name``."""
 
@@ -43,6 +56,7 @@ def list_class_prediction_csvs(experiment_dir: Path, csv_name: str) -> list[tupl
 def read_predictions_csv(csv_path: Path, class_name: str | None) -> list[tuple[str | None, str, str]]:
     """Parse ID and Label rows; optionally associate with *class_name*."""
 
+    _ensure_csv_field_limit_for_q8rle()
     rows: list[tuple[str | None, str, str]] = []
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
