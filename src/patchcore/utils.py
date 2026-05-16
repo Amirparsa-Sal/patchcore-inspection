@@ -57,9 +57,15 @@ def plot_segmentation_images(
 ):
     """Generate anomaly segmentation images and q8rle-encoded prediction CSVs.
 
-    Saves visualisation images (original, ground truth, predicted map) into a
-    ``segmentation_images/`` subfolder of *savefolder*. Image files and CSV IDs
-    use only the source image basename (no parent directory names).
+    Saves full comparison figures (original, optional ground truth, predicted map)
+    under ``segmentation_images/`` for every sample.
+
+    For samples labelled as defective (``is_anomaly`` or inferred from masks),
+    the predicted anomaly map alone is also saved under
+    ``anomaly_segmentation_maps/`` using the same colour scale ``[0, 1]``.
+
+    Image files and CSV IDs use only the source image basename (no parent
+    directory names).
 
     Predicted anomaly heatmaps use a fixed colour scale ``[0, 1]`` (``vmin`` /
     ``vmax`` on ``imshow``) so maps are comparable across images and runs.
@@ -101,7 +107,10 @@ def plot_segmentation_images(
         return mask_path is not None
 
     images_folder = os.path.join(savefolder, "segmentation_images")
+    anomaly_maps_folder = os.path.join(savefolder, "anomaly_segmentation_maps")
     os.makedirs(images_folder, exist_ok=True)
+
+    n_anomaly_maps_saved = 0
 
     csv_rows_normal = []
     csv_rows_anomalous = []
@@ -165,6 +174,26 @@ def plot_segmentation_images(
         f.savefig(savename)
         plt.close()
 
+        if defect is True:
+            os.makedirs(anomaly_maps_folder, exist_ok=True)
+            map_basename = os.path.basename(image_path)
+            map_save_path = os.path.join(anomaly_maps_folder, map_basename)
+            fig_m, ax_m = plt.subplots(
+                1, 1, figsize=(5, 5 * seg2d.shape[0] / max(seg2d.shape[1], 1))
+            )
+            ax_m.imshow(seg2d, **heatmap_kw, aspect="equal")
+            ax_m.set_axis_off()
+            fig_m.tight_layout(pad=0)
+            fig_m.savefig(map_save_path, bbox_inches="tight", pad_inches=0)
+            plt.close(fig_m)
+            n_anomaly_maps_saved += 1
+
+    if n_anomaly_maps_saved:
+        LOGGER.info(
+            "Saved %d anomaly-only segmentation maps under %s",
+            n_anomaly_maps_saved,
+            anomaly_maps_folder,
+        )
     if is_anomaly is not None or masks_provided:
         path_normal = os.path.join(savefolder, "predictions_normal.csv")
         path_anomalous = os.path.join(savefolder, "predictions_anomalous.csv")
