@@ -58,10 +58,10 @@ class MVTecDataset(torch.utils.data.Dataset):
                     resized to.
             imagesize: [int]. (Square) Size the resized loaded image gets
                        (center-)cropped to.
-            split: [enum-option]. Indicates if training or test split of the
-                   data should be used. Has to be an option taken from
-                   DatasetSplit, e.g. mvtec.DatasetSplit.TRAIN. Note that
-                   mvtec.DatasetSplit.TEST will also load mask data.
+            split: [enum-option]. Indicates which split under ``classname/`` is
+                   used (``train``, ``val``, or ``test``). Has to be an option
+                   taken from DatasetSplit. ``TEST`` and on-disk ``VAL`` splits
+                   load pixel masks from ``ground_truth`` for defect categories.
         """
         super().__init__()
         self.source = source
@@ -95,7 +95,7 @@ class MVTecDataset(torch.utils.data.Dataset):
         image = PIL.Image.open(image_path).convert("RGB")
         image = self.transform_img(image)
 
-        if self.split == DatasetSplit.TEST and mask_path is not None:
+        if mask_path is not None:
             mask = PIL.Image.open(mask_path)
             mask = self.transform_mask(mask)
         else:
@@ -145,7 +145,10 @@ class MVTecDataset(torch.utils.data.Dataset):
                             classname
                         ][anomaly][train_val_split_idx:]
 
-                if self.split == DatasetSplit.TEST and anomaly != "good":
+                if (
+                    self.split in (DatasetSplit.TEST, DatasetSplit.VAL)
+                    and anomaly != "good"
+                ):
                     anomaly_mask_path = os.path.join(maskpath, anomaly)
                     anomaly_mask_files = sorted(os.listdir(anomaly_mask_path))
                     maskpaths_per_class[classname][anomaly] = [
@@ -160,7 +163,10 @@ class MVTecDataset(torch.utils.data.Dataset):
             for anomaly in sorted(imgpaths_per_class[classname].keys()):
                 for i, image_path in enumerate(imgpaths_per_class[classname][anomaly]):
                     data_tuple = [classname, anomaly, image_path]
-                    if self.split == DatasetSplit.TEST and anomaly != "good":
+                    if (
+                        self.split in (DatasetSplit.TEST, DatasetSplit.VAL)
+                        and anomaly != "good"
+                    ):
                         data_tuple.append(maskpaths_per_class[classname][anomaly][i])
                     else:
                         data_tuple.append(None)

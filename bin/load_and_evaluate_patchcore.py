@@ -19,6 +19,128 @@ LOGGER = logging.getLogger(__name__)
 _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
 
 
+def _evaluate_patchcore_on_dataloader(
+    PatchCore_list,
+    eval_dataloader,
+    segmentation_savefolder,
+    save_segmentation_images,
+    dataset_row_name,
+    split_label,
+):
+    """Embed *eval_dataloader* through each PatchCore model and compute MVTec-style metrics.
+
+    Normalizes ensemble scores/segmentations like the original evaluation script.
+    Optionally writes segmentation visualisations under *segmentation_savefolder*.
+
+    Args:
+        PatchCore_list: Loaded PatchCore instances (single model or ensemble).
+        eval_dataloader: DataLoader whose dataset exposes ``data_to_iterate``.
+        segmentation_savefolder: Root directory passed to ``plot_segmentation_images``.
+        save_segmentation_images: Whether to render segmentation figures.
+        dataset_row_name: Label stored in the results table (e.g. ``mvtec_bottle``).
+        split_label: Short name for logs (``test`` or ``validation``).
+
+    Returns:
+        Dict with keys ``dataset_name``, ``instance_auroc``, ``full_pixel_auroc``,
+        ``anomaly_pixel_auroc``.
+    """
+    aggregator = {"scores": [], "segmentations": []}
+    masks_gt = None
+    for i, PatchCore in enumerate(PatchCore_list):
+        torch.cuda.empty_cache()
+        LOGGER.info(
+            "Embedding {} data with models ({}/{})".format(
+                split_label, i + 1, len(PatchCore_list)
+            )
+        )
+        scores, segmentations, labels_gt, masks_gt = PatchCore.predict(eval_dataloader)
+        aggregator["scores"].append(scores)
+        aggregator["segmentations"].append(segmentations)
+
+    scores = np.array(aggregator["scores"])
+    min_scores = scores.min(axis=-1).reshape(-1, 1)
+    max_scores = scores.max(axis=-1).reshape(-1, 1)
+    scores = (scores - min_scores) / (max_scores - min_scores)
+    scores = np.mean(scores, axis=0)
+
+    segmentations = np.array(aggregator["segmentations"])
+    min_scores = (
+        segmentations.reshape(len(segmentations), -1)
+        .min(axis=-1)
+        .reshape(-1, 1, 1, 1)
+    )
+    max_scores = (
+        segmentations.reshape(len(segmentations), -1)
+        .max(axis=-1)
+        .reshape(-1, 1, 1, 1)
+    )
+    segmentations = (segmentations - min_scores) / (max_scores - min_scores)
+    segmentations = np.mean(segmentations, axis=0)
+
+    ds = eval_dataloader.dataset
+    anomaly_labels = [x[1] != "good" for x in ds.data_to_iterate]
+
+    if save_segmentation_images:
+        os.makedirs(segmentation_savefolder, exist_ok=True)
+        image_paths = [x[2] for x in ds.data_to_iterate]
+        mask_paths = [x[3] for x in ds.data_to_iterate]
+
+        def image_transform(image):
+            in_std = np.array(ds.transform_std).reshape(-1, 1, 1)
+            in_mean = np.array(ds.transform_mean).reshape(-1, 1, 1)
+            image = ds.transform_img(image)
+            return np.clip(
+                (image.numpy() * in_std + in_mean) * 255, 0, 255
+            ).astype(np.uint8)
+
+        def mask_transform(mask):
+            return ds.transform_mask(mask).numpy()
+
+        patchcore.utils.plot_segmentation_images(
+            segmentation_savefolder,
+            image_paths,
+            segmentations,
+            scores,
+            mask_paths,
+            image_transform=image_transform,
+            mask_transform=mask_transform,
+            is_anomaly=anomaly_labels,
+        )
+
+    LOGGER.info(
+        "Computing evaluation metrics ({}, split={}).".format(
+            dataset_row_name, split_label
+        )
+    )
+    auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
+        scores, anomaly_labels
+    )["auroc"]
+
+    pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+        segmentations, masks_gt
+    )
+    full_pixel_auroc = pixel_scores["auroc"]
+
+    sel_idxs = []
+    for i in range(len(masks_gt)):
+        if np.sum(masks_gt[i]) > 0:
+            sel_idxs.append(i)
+    if len(sel_idxs) == 0:
+        anomaly_pixel_auroc = float("nan")
+    else:
+        pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+            [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs]
+        )
+        anomaly_pixel_auroc = pixel_scores["auroc"]
+
+    return {
+        "dataset_name": dataset_row_name,
+        "instance_auroc": auroc,
+        "full_pixel_auroc": full_pixel_auroc,
+        "anomaly_pixel_auroc": anomaly_pixel_auroc,
+    }
+
+
 @click.group(chain=True)
 @click.argument("results_path", type=str)
 @click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
@@ -56,15 +178,20 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
         )
 
     for dataloader_count, dataloaders in enumerate(dataloader_iter):
+        log_dataset = dataloaders["testing"].name
+        if dataloaders.get("validation") is not None:
+            log_dataset = "{} (+ {})".format(
+                log_dataset, dataloaders["validation"].name
+            )
         LOGGER.info(
             "Evaluating dataset [{}] ({}/{})...".format(
-                dataloaders["testing"].name, dataloader_count + 1, n_dataloaders
+                log_dataset, dataloader_count + 1, n_dataloaders
             )
         )
 
         patchcore.utils.fix_seeds(seed, device)
 
-        dataset_name = dataloaders["testing"].name
+        test_name = dataloaders["testing"].name
 
         with device_context:
 
@@ -72,113 +199,40 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             if dataloader_count < n_patchcores:
                 PatchCore_list = next(patchcore_iter)
 
-            aggregator = {"scores": [], "segmentations": []}
-            for i, PatchCore in enumerate(PatchCore_list):
-                torch.cuda.empty_cache()
-                LOGGER.info(
-                    "Embedding test data with models ({}/{})".format(
-                        i + 1, len(PatchCore_list)
+            eval_jobs = [
+                (
+                    dataloaders["testing"],
+                    test_name,
+                    results_path,
+                    "test",
+                )
+            ]
+            if dataloaders.get("validation") is not None:
+                val_dl = dataloaders["validation"]
+                val_plot_root = os.path.join(results_path, "validation", test_name)
+                eval_jobs.append(
+                    (
+                        val_dl,
+                        val_dl.name,
+                        val_plot_root,
+                        "validation",
                     )
                 )
-                scores, segmentations, labels_gt, masks_gt = PatchCore.predict(
-                    dataloaders["testing"]
+
+            for eval_dl, row_name, plot_root, split_label in eval_jobs:
+                metrics_row = _evaluate_patchcore_on_dataloader(
+                    PatchCore_list,
+                    eval_dl,
+                    plot_root,
+                    save_segmentation_images,
+                    row_name,
+                    split_label,
                 )
-                aggregator["scores"].append(scores)
-                aggregator["segmentations"].append(segmentations)
+                result_collect.append(metrics_row)
 
-            scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
-            scores = np.mean(scores, axis=0)
-
-            segmentations = np.array(aggregator["segmentations"])
-            min_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .min(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            max_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .max(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            segmentations = (segmentations - min_scores) / (max_scores - min_scores)
-            segmentations = np.mean(segmentations, axis=0)
-
-            anomaly_labels = [
-                x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
-            ]
-
-            # Plot Example Images.
-            if save_segmentation_images:
-                image_paths = [
-                    x[2] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
-                mask_paths = [
-                    x[3] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
-
-                def image_transform(image):
-                    in_std = np.array(
-                        dataloaders["testing"].dataset.transform_std
-                    ).reshape(-1, 1, 1)
-                    in_mean = np.array(
-                        dataloaders["testing"].dataset.transform_mean
-                    ).reshape(-1, 1, 1)
-                    image = dataloaders["testing"].dataset.transform_img(image)
-                    return np.clip(
-                        (image.numpy() * in_std + in_mean) * 255, 0, 255
-                    ).astype(np.uint8)
-
-                def mask_transform(mask):
-                    return dataloaders["testing"].dataset.transform_mask(mask).numpy()
-
-                patchcore.utils.plot_segmentation_images(
-                    results_path,
-                    image_paths,
-                    segmentations,
-                    scores,
-                    mask_paths,
-                    image_transform=image_transform,
-                    mask_transform=mask_transform,
-                    is_anomaly=anomaly_labels,
-                )
-
-            LOGGER.info("Computing evaluation metrics.")
-            # Compute Image-level AUROC scores for all images.
-            auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
-                scores, anomaly_labels
-            )["auroc"]
-
-            # Compute PRO score & PW Auroc for all images
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                segmentations, masks_gt
-            )
-            full_pixel_auroc = pixel_scores["auroc"]
-
-            # Compute PRO score & PW Auroc only for images with anomalies
-            sel_idxs = []
-            for i in range(len(masks_gt)):
-                if np.sum(masks_gt[i]) > 0:
-                    sel_idxs.append(i)
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs]
-            )
-            anomaly_pixel_auroc = pixel_scores["auroc"]
-
-            result_collect.append(
-                {
-                    "dataset_name": dataset_name,
-                    "instance_auroc": auroc,
-                    "full_pixel_auroc": full_pixel_auroc,
-                    "anomaly_pixel_auroc": anomaly_pixel_auroc,
-                }
-            )
-
-            for key, item in result_collect[-1].items():
-                if key != "dataset_name":
-                    LOGGER.info("{0}: {1:3.3f}".format(key, item))
+                for key, item in metrics_row.items():
+                    if key != "dataset_name":
+                        LOGGER.info("{0}: {1:3.3f}".format(key, item))
 
             del PatchCore_list
             gc.collect()
@@ -275,6 +329,27 @@ def dataset(
                 test_dataloader.name += "_" + subdataset
 
             dataloader_dict = {"testing": test_dataloader}
+
+            val_dir = os.path.join(data_path, subdataset, "val")
+            if os.path.isdir(val_dir):
+                val_dataset = dataset_library.__dict__[dataset_info[1]](
+                    data_path,
+                    classname=subdataset,
+                    resize=resize,
+                    imagesize=imagesize,
+                    split=dataset_library.DatasetSplit.VAL,
+                    seed=seed,
+                )
+
+                val_dataloader = torch.utils.data.DataLoader(
+                    val_dataset,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=True,
+                )
+                val_dataloader.name = test_dataloader.name + "_val"
+                dataloader_dict["validation"] = val_dataloader
 
             yield dataloader_dict
 
