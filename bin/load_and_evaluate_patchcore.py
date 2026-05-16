@@ -35,7 +35,8 @@ def _evaluate_patchcore_on_dataloader(
     Args:
         PatchCore_list: Loaded PatchCore instances (single model or ensemble).
         eval_dataloader: DataLoader whose dataset exposes ``data_to_iterate``.
-        segmentation_savefolder: Root directory passed to ``plot_segmentation_images``.
+        segmentation_savefolder: Root directory passed to ``plot_segmentation_images``
+            (e.g. ``results/test/<dataset_name>`` or ``results/validation/<dataset_name>``).
         save_segmentation_images: Whether to render segmentation figures.
         dataset_row_name: Label stored in the results table (e.g. ``mvtec_bottle``).
         split_label: Short name for logs (``test`` or ``validation``).
@@ -199,11 +200,12 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             if dataloader_count < n_patchcores:
                 PatchCore_list = next(patchcore_iter)
 
+            test_plot_root = os.path.join(results_path, "test", test_name)
             eval_jobs = [
                 (
                     dataloaders["testing"],
                     test_name,
-                    results_path,
+                    test_plot_root,
                     "test",
                 )
             ]

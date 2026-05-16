@@ -9,7 +9,8 @@
 # to log_group_0 on the second class (which would save models where eval cannot find them).
 # Example: results/anomaly_challenge/my_run/bottle/models/mvtec_bottle/
 #
-# Evaluation outputs (load_and_evaluate_patchcore): {eval_dir}/{class}/ holds results.csv and segmentation_images/.
+# Evaluation outputs (load_and_evaluate_patchcore): results.csv at {eval_dir}/;
+#   per-split artifacts under {eval_dir}/test/{class}/ and optional {eval_dir}/validation/{class}/.
 # Parameters (CLI flags override environment defaults):
 #   LOG_PROJECT      -- outer folder under results (default: anomaly_challenge)
 #   LOG_GROUP        -- inner run folder; set via --log-group or env LOG_GROUP (required)

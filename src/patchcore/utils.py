@@ -36,6 +36,15 @@ def float_matrix_to_q8rle(x: np.ndarray) -> str:
     return " ".join(parts)
 
 
+def _segmentation_map_to_2d(segmentation) -> np.ndarray:
+    """Collapse leading singleton dimensions so Matplotlib gets a 2D anomaly map."""
+
+    arr = np.asarray(segmentation, dtype=np.float64)
+    while arr.ndim > 2:
+        arr = arr[0]
+    return arr
+
+
 def plot_segmentation_images(
     savefolder,
     image_paths,
@@ -51,6 +60,9 @@ def plot_segmentation_images(
     Saves visualisation images (original, ground truth, predicted map) into a
     ``segmentation_images/`` subfolder of *savefolder*. Image files and CSV IDs
     use only the source image basename (no parent directory names).
+
+    Predicted anomaly heatmaps use a fixed colour scale ``[0, 1]`` (``vmin`` /
+    ``vmax`` on ``imshow``) so maps are comparable across images and runs.
 
     Writes ``predictions_normal.csv`` and ``predictions_anomalous.csv`` (each
     with columns ``ID``, ``Label``) when sample type is known. If type cannot
@@ -136,16 +148,18 @@ def plot_segmentation_images(
             csv_rows_normal.append(row)
 
         savename = os.path.join(images_folder, savename)
+        seg2d = _segmentation_map_to_2d(segmentation)
+        heatmap_kw = {"vmin": 0.0, "vmax": 1.0}
         if masks_provided:
             f, axes = plt.subplots(1, 3)
             axes[0].imshow(image.transpose(1, 2, 0))
             axes[1].imshow(mask.transpose(1, 2, 0))
-            axes[2].imshow(segmentation)
+            axes[2].imshow(seg2d, **heatmap_kw)
             f.set_size_inches(9, 3)
         else:
             f, axes = plt.subplots(1, 2)
             axes[0].imshow(image.transpose(1, 2, 0))
-            axes[1].imshow(segmentation)
+            axes[1].imshow(seg2d, **heatmap_kw)
             f.set_size_inches(6, 3)
         f.tight_layout()
         f.savefig(savename)

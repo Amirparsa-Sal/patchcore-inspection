@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Merge ``predictions_normal.csv`` files from every class folder under one experiment root.
 
-This matches the evaluation layout produced by ``train_eval_mvtec_classes.sh``:
+This matches the evaluation layout from ``load_and_evaluate_patchcore.py``:
 
-    {experiment_dir}/{mvtec_class}/predictions_normal.csv
+    {experiment_dir}/test/{mvtec_class}/predictions_normal.csv
+
+Legacy layout (immediate class subfolders) is still supported if ``test/`` is absent.
 
 Each per-class file has columns ``ID``, ``Label`` (see ``patchcore.utils.plot_segmentation_images``).
 The merged file adds a ``Class`` column so IDs that repeat across classes (e.g. ``000``)
@@ -41,11 +43,27 @@ def _ensure_csv_field_limit_for_q8rle() -> None:
 
 
 def list_class_prediction_csvs(experiment_dir: Path, csv_name: str) -> list[tuple[str, Path]]:
-    """Return sorted ``(class_name, csv_path)`` for direct child dirs containing ``csv_name``."""
+    """Return sorted ``(class_name, csv_path)`` for class folders containing ``csv_name``.
+
+    Prefer ``experiment_dir/test/<class>/`` (layout from ``load_and_evaluate_patchcore``).
+    If that yields no files, fall back to immediate subdirectories of *experiment_dir*.
+    """
 
     pairs: list[tuple[str, Path]] = []
+    test_root = experiment_dir / "test"
+    if test_root.is_dir():
+        for child in sorted(test_root.iterdir()):
+            if not child.is_dir():
+                continue
+            path = child / csv_name
+            if path.is_file():
+                pairs.append((child.name, path))
+        if pairs:
+            return pairs
+
+    skip_root_names = {"test", "validation"}
     for child in sorted(experiment_dir.iterdir()):
-        if not child.is_dir():
+        if not child.is_dir() or child.name in skip_root_names:
             continue
         path = child / csv_name
         if path.is_file():
@@ -114,7 +132,8 @@ def merge_normal_predictions(
 
     if not found_any:
         print(
-            f"error: no `{csv_name}` files found under class subdirectories of {experiment_dir}",
+            f"error: no `{csv_name}` files found under {experiment_dir}/test/*/ "
+            f"or legacy class subdirectories",
             file=sys.stderr,
         )
         return 1
@@ -141,16 +160,16 @@ def merge_normal_predictions(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Merge predictions_normal.csv from each immediate subdirectory "
-            "of an experiment folder (one MVTec class per subdirectory)."
+            "Merge predictions_normal.csv from each class folder under "
+            "experiment_dir/test/<class>/ (or legacy: immediate subdirectories)."
         )
     )
     parser.add_argument(
         "experiment_dir",
         type=Path,
         help=(
-            "Experiment root containing class subfolders "
-            "(e.g. evaluated_results/p01)."
+            "Experiment root (e.g. evaluated_results/p01). CSVs are read from "
+            "test/<class>/ when present, else from immediate class subfolders."
         ),
     )
     parser.add_argument(
