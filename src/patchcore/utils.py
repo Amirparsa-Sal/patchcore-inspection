@@ -58,11 +58,14 @@ def plot_segmentation_images(
     """Generate anomaly segmentation images and q8rle-encoded prediction CSVs.
 
     Saves full comparison figures (original, optional ground truth, predicted map)
-    under ``segmentation_images/`` for every sample.
+    using the same subplot grid as before:
 
-    For samples labelled as defective (``is_anomaly`` or inferred from masks),
-    the predicted anomaly map alone is also saved under
-    ``anomaly_segmentation_maps/`` using the same colour scale ``[0, 1]``.
+    * Normal samples → ``segmentation_images/`` (``1×3`` when masks are provided,
+      else ``1×2``).
+    * Defective samples → ``anomalous_segmentation_images/`` (same layout).
+
+    If normal vs anomalous cannot be inferred (no masks and no ``is_anomaly``),
+    all figures are written under ``segmentation_images/`` only.
 
     Image files and CSV IDs use only the source image basename (no parent
     directory names).
@@ -106,11 +109,12 @@ def plot_segmentation_images(
             return False
         return mask_path is not None
 
-    images_folder = os.path.join(savefolder, "segmentation_images")
-    anomaly_maps_folder = os.path.join(savefolder, "anomaly_segmentation_maps")
-    os.makedirs(images_folder, exist_ok=True)
+    normal_folder = os.path.join(savefolder, "segmentation_images")
+    anomalous_folder = os.path.join(savefolder, "anomalous_segmentation_images")
 
-    n_anomaly_maps_saved = 0
+    n_saved_normal = 0
+    n_saved_anomalous = 0
+    n_saved_unsplit = 0
 
     csv_rows_normal = []
     csv_rows_anomalous = []
@@ -156,7 +160,18 @@ def plot_segmentation_images(
         elif defect is False:
             csv_rows_normal.append(row)
 
-        savename = os.path.join(images_folder, savename)
+        if defect is True:
+            target_dir = anomalous_folder
+            n_saved_anomalous += 1
+        elif defect is False:
+            target_dir = normal_folder
+            n_saved_normal += 1
+        else:
+            target_dir = normal_folder
+            n_saved_unsplit += 1
+
+        os.makedirs(target_dir, exist_ok=True)
+        out_path = os.path.join(target_dir, savename)
         seg2d = _segmentation_map_to_2d(segmentation)
         heatmap_kw = {"vmin": 0.0, "vmax": 1.0}
         if masks_provided:
@@ -171,28 +186,26 @@ def plot_segmentation_images(
             axes[1].imshow(seg2d, **heatmap_kw)
             f.set_size_inches(6, 3)
         f.tight_layout()
-        f.savefig(savename)
-        plt.close()
+        f.savefig(out_path)
+        plt.close(f)
 
-        if defect is True:
-            os.makedirs(anomaly_maps_folder, exist_ok=True)
-            map_basename = os.path.basename(image_path)
-            map_save_path = os.path.join(anomaly_maps_folder, map_basename)
-            fig_m, ax_m = plt.subplots(
-                1, 1, figsize=(5, 5 * seg2d.shape[0] / max(seg2d.shape[1], 1))
-            )
-            ax_m.imshow(seg2d, **heatmap_kw, aspect="equal")
-            ax_m.set_axis_off()
-            fig_m.tight_layout(pad=0)
-            fig_m.savefig(map_save_path, bbox_inches="tight", pad_inches=0)
-            plt.close(fig_m)
-            n_anomaly_maps_saved += 1
-
-    if n_anomaly_maps_saved:
+    if n_saved_normal:
         LOGGER.info(
-            "Saved %d anomaly-only segmentation maps under %s",
-            n_anomaly_maps_saved,
-            anomaly_maps_folder,
+            "Saved %d normal segmentation figures under %s",
+            n_saved_normal,
+            normal_folder,
+        )
+    if n_saved_anomalous:
+        LOGGER.info(
+            "Saved %d anomalous segmentation figures under %s",
+            n_saved_anomalous,
+            anomalous_folder,
+        )
+    if n_saved_unsplit:
+        LOGGER.info(
+            "Saved %d segmentation figures under %s (normal/anomalous split unknown)",
+            n_saved_unsplit,
+            normal_folder,
         )
     if is_anomaly is not None or masks_provided:
         path_normal = os.path.join(savefolder, "predictions_normal.csv")
