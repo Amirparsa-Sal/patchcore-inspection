@@ -121,6 +121,7 @@ def _evaluate_patchcore_on_dataloader(
         segmentations, masks_gt
     )
     full_pixel_auroc = pixel_scores["auroc"]
+    full_pixel_ap = pixel_scores["ap"]
 
     sel_idxs = []
     for i in range(len(masks_gt)):
@@ -128,17 +129,21 @@ def _evaluate_patchcore_on_dataloader(
             sel_idxs.append(i)
     if len(sel_idxs) == 0:
         anomaly_pixel_auroc = float("nan")
+        anomaly_pixel_ap = float("nan")
     else:
         pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
             [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs]
         )
         anomaly_pixel_auroc = pixel_scores["auroc"]
+        anomaly_pixel_ap = pixel_scores["ap"]
 
     return {
         "dataset_name": dataset_row_name,
         "instance_auroc": auroc,
         "full_pixel_auroc": full_pixel_auroc,
+        "full_pixel_ap": full_pixel_ap,
         "anomaly_pixel_auroc": anomaly_pixel_auroc,
+        "anomaly_pixel_ap": anomaly_pixel_ap,
     }
 
 

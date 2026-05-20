@@ -32,7 +32,7 @@ class PatchCore(torch.nn.Module):
         target_embed_dimension,
         patchsize=3,
         patchstride=1,
-        anomaly_score_num_nn=1,
+        anomaly_scorer_num_nn=1,
         featuresampler=patchcore.sampler.IdentitySampler(),
         nn_method=patchcore.common.FaissNN(False, 4),
         **kwargs,
@@ -67,7 +67,7 @@ class PatchCore(torch.nn.Module):
         self.forward_modules["preadapt_aggregator"] = preadapt_aggregator
 
         self.anomaly_scorer = patchcore.common.NearestNeighbourScorer(
-            n_nearest_neighbours=anomaly_score_num_nn, nn_method=nn_method
+            n_nearest_neighbours=anomaly_scorer_num_nn, nn_method=nn_method
         )
 
         self.anomaly_segmentor = patchcore.common.RescaleSegmentor(

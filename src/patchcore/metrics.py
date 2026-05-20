@@ -44,15 +44,20 @@ def compute_pixelwise_retrieval_metrics(anomaly_segmentations, ground_truth_mask
     flat_anomaly_segmentations = anomaly_segmentations.ravel()
     flat_ground_truth_masks = ground_truth_masks.ravel()
 
+    binary_ground_truth = (flat_ground_truth_masks > 0.5).astype(int)
+
     fpr, tpr, thresholds = metrics.roc_curve(
-        flat_ground_truth_masks.astype(int), flat_anomaly_segmentations
+        binary_ground_truth, flat_anomaly_segmentations
     )
     auroc = metrics.roc_auc_score(
-        flat_ground_truth_masks.astype(int), flat_anomaly_segmentations
+        binary_ground_truth, flat_anomaly_segmentations
+    )
+    ap = metrics.average_precision_score(
+        binary_ground_truth, flat_anomaly_segmentations
     )
 
     precision, recall, thresholds = metrics.precision_recall_curve(
-        flat_ground_truth_masks.astype(int), flat_anomaly_segmentations
+        binary_ground_truth, flat_anomaly_segmentations
     )
     F1_scores = np.divide(
         2 * precision * recall,
@@ -63,11 +68,12 @@ def compute_pixelwise_retrieval_metrics(anomaly_segmentations, ground_truth_mask
 
     optimal_threshold = thresholds[np.argmax(F1_scores)]
     predictions = (flat_anomaly_segmentations >= optimal_threshold).astype(int)
-    fpr_optim = np.mean(predictions > flat_ground_truth_masks)
-    fnr_optim = np.mean(predictions < flat_ground_truth_masks)
+    fpr_optim = np.mean(predictions > binary_ground_truth)
+    fnr_optim = np.mean(predictions < binary_ground_truth)
 
     return {
         "auroc": auroc,
+        "ap": ap,
         "fpr": fpr,
         "tpr": tpr,
         "optimal_threshold": optimal_threshold,

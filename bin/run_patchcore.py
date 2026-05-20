@@ -184,8 +184,9 @@ def run(
                 segmentations, masks_gt
             )
             full_pixel_auroc = pixel_scores["auroc"]
+            full_pixel_ap = pixel_scores["ap"]
 
-            # Compute PRO score & PW Auroc only images with anomalies
+            # Compute PW Auroc & AP only for images with anomalies
             sel_idxs = []
             for i in range(len(masks_gt)):
                 if np.sum(masks_gt[i]) > 0:
@@ -195,13 +196,16 @@ def run(
                 [masks_gt[i] for i in sel_idxs],
             )
             anomaly_pixel_auroc = pixel_scores["auroc"]
+            anomaly_pixel_ap = pixel_scores["ap"]
 
             result_collect.append(
                 {
                     "dataset_name": dataset_name,
                     "instance_auroc": auroc,
                     "full_pixel_auroc": full_pixel_auroc,
+                    "full_pixel_ap": full_pixel_ap,
                     "anomaly_pixel_auroc": anomaly_pixel_auroc,
+                    "anomaly_pixel_ap": anomaly_pixel_ap,
                 }
             )
 
