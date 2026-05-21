@@ -154,12 +154,19 @@ def _evaluate_patchcore_on_dataloader(
 @click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 @click.option("--save_segmentation_images", is_flag=True)
+@click.option(
+    "--eval_splits",
+    type=click.Choice(["test", "val", "both"]),
+    default="both",
+    show_default=True,
+    help="Which split(s) to evaluate: 'test', 'val', or 'both'.",
+)
 def main(**kwargs):
     pass
 
 
 @main.result_callback()
-def run(methods, results_path, gpu, seed, save_segmentation_images):
+def run(methods, results_path, gpu, seed, save_segmentation_images, eval_splits):
     methods = {key: item for (key, item) in methods}
 
     os.makedirs(results_path, exist_ok=True)
@@ -185,9 +192,13 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             "Please ensure that #PatchCores == #Datasets or #PatchCores == 1!"
         )
 
+    run_test = eval_splits in ("test", "both")
+    run_val = eval_splits in ("val", "both")
+    LOGGER.info("Eval splits requested: %s", eval_splits)
+
     for dataloader_count, dataloaders in enumerate(dataloader_iter):
         log_dataset = dataloaders["testing"].name
-        if dataloaders.get("validation") is not None:
+        if run_val and dataloaders.get("validation") is not None:
             log_dataset = "{} (+ {})".format(
                 log_dataset, dataloaders["validation"].name
             )
@@ -207,16 +218,18 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             if dataloader_count < n_patchcores:
                 PatchCore_list = next(patchcore_iter)
 
-            test_plot_root = os.path.join(results_path, "test", test_name)
-            eval_jobs = [
-                (
-                    dataloaders["testing"],
-                    test_name,
-                    test_plot_root,
-                    "test",
+            eval_jobs = []
+            if run_test:
+                test_plot_root = os.path.join(results_path, "test", test_name)
+                eval_jobs.append(
+                    (
+                        dataloaders["testing"],
+                        test_name,
+                        test_plot_root,
+                        "test",
+                    )
                 )
-            ]
-            if dataloaders.get("validation") is not None:
+            if run_val and dataloaders.get("validation") is not None:
                 val_dl = dataloaders["validation"]
                 val_plot_root = os.path.join(results_path, "validation", test_name)
                 eval_jobs.append(

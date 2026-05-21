@@ -46,6 +46,7 @@ cd "$REPO_ROOT"
 : "${SEED:=0}"
 : "${NUM_WORKERS:=8}"
 : "${FAISS_NUM_WORKERS:=8}"
+: "${EVAL_SPLITS:=both}"
 
 EVAL_RESULTS_DIR="${EVAL_RESULTS_DIR:-}"
 TRAIN_RESULTS_DIR="${TRAIN_RESULTS_DIR:-}"
@@ -70,6 +71,7 @@ Options:
   --seed N               Random seed (default: ${SEED})
   --num-workers N        DataLoader worker processes (default: ${NUM_WORKERS})
   --faiss-num-workers N  FAISS threads for NN search (default: ${FAISS_NUM_WORKERS})
+  --eval-splits SPLITS   Which splits to evaluate: test, val, or both (default: ${EVAL_SPLITS})
   --eval-dir PATH        Evaluation root; outputs go under PATH/<class>/ (default: evaluated_results/<log_group>)
   --train-results PATH   Training results root first arg (default: results)
   --notify               Send Pushbullet notes for each phase (needs PUSHBULLET_API_KEY)
@@ -127,6 +129,10 @@ while [[ $# -gt 0 ]]; do
       FAISS_NUM_WORKERS="$2"
       shift 2
       ;;
+    --eval-splits)
+      EVAL_SPLITS="$2"
+      shift 2
+      ;;
     --eval-dir)
       EVAL_RESULTS_DIR="$2"
       shift 2
@@ -169,6 +175,11 @@ fi
 
 if [[ -z "${LOG_GROUP:-}" ]]; then
   echo "error: set LOG_GROUP (environment) or pass --log-group (inner run folder under .../results/<log_project>/)." >&2
+  exit 1
+fi
+
+if [[ "${EVAL_SPLITS}" != "test" && "${EVAL_SPLITS}" != "val" && "${EVAL_SPLITS}" != "both" ]]; then
+  echo "error: --eval-splits must be one of: test, val, both (got '${EVAL_SPLITS}')." >&2
   exit 1
 fi
 
@@ -252,6 +263,7 @@ echo "  eval_save_pattern  = ${EVAL_RESULTS_DIR}/<class>/"
 echo "  gpu / seed         = ${GPU} / ${SEED}"
 echo "  num_workers        = ${NUM_WORKERS}"
 echo "  faiss_num_workers  = ${FAISS_NUM_WORKERS}"
+echo "  eval_splits        = ${EVAL_SPLITS}"
 echo "  classes (${NUM_CLASSES}): ${CLASSES[*]}"
 echo ""
 
@@ -310,6 +322,7 @@ for class_name in "${CLASSES[@]}"; do
   python bin/load_and_evaluate_patchcore.py \
     --gpu "${GPU}" --seed "${SEED}" \
     --save_segmentation_images \
+    --eval_splits "${EVAL_SPLITS}" \
     "${CLASS_EVAL_DIR}" \
     patch_core_loader \
       -p "${TRAIN_RESULTS_DIR}/${LOG_PROJECT}/${CLASS_LOG_GROUP}/models/mvtec_${class_name}" \
