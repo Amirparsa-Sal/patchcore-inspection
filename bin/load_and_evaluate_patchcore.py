@@ -108,10 +108,12 @@ def _evaluate_patchcore_on_dataloader(
             is_anomaly=anomaly_labels,
         )
 
+    n_anomaly = sum(anomaly_labels)
+    n_normal = len(anomaly_labels) - n_anomaly
     LOGGER.info(
-        "Computing evaluation metrics ({}, split={}).".format(
-            dataset_row_name, split_label
-        )
+        "Computing evaluation metrics for [%s] split=[%s] "
+        "(%d normal, %d anomalous images)...",
+        dataset_row_name, split_label, n_normal, n_anomaly,
     )
     auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
         scores, anomaly_labels
@@ -189,10 +191,10 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             log_dataset = "{} (+ {})".format(
                 log_dataset, dataloaders["validation"].name
             )
+        LOGGER.info("-" * 60)
         LOGGER.info(
-            "Evaluating dataset [{}] ({}/{})...".format(
-                log_dataset, dataloader_count + 1, n_dataloaders
-            )
+            "Evaluating dataset [%s] (%d/%d)...",
+            log_dataset, dataloader_count + 1, n_dataloaders,
         )
 
         patchcore.utils.fix_seeds(seed, device)
@@ -237,14 +239,17 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                 )
                 result_collect.append(metrics_row)
 
+                LOGGER.info(
+                    "Results for [%s] split=[%s]:", row_name, split_label
+                )
                 for key, item in metrics_row.items():
                     if key != "dataset_name":
-                        LOGGER.info("{0}: {1:3.3f}".format(key, item))
+                        LOGGER.info("  %s: %.4f", key, item)
 
             del PatchCore_list
             gc.collect()
 
-        LOGGER.info("\n\n-----\n")
+        LOGGER.info("")
 
     result_metric_names = list(result_collect[-1].keys())[1:]
     result_dataset_names = [results["dataset_name"] for results in result_collect]

@@ -313,7 +313,14 @@ def compute_and_store_final_results(
     mean_metrics = {}
     for i, result_key in enumerate(column_names):
         mean_metrics[result_key] = np.mean([x[i] for x in results])
-        LOGGER.info("{0}: {1:3.3f}".format(result_key, mean_metrics[result_key]))
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("FINAL SUMMARY (mean over %d evaluation(s)):", len(results))
+    if row_names is not None:
+        LOGGER.info("  Datasets: %s", ", ".join(row_names))
+    for result_key, value in mean_metrics.items():
+        LOGGER.info("  %s: %.4f", result_key, value)
+    LOGGER.info("=" * 60)
 
     savename = os.path.join(results_path, "results.csv")
     with open(savename, "w") as csv_file:
